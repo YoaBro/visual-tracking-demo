@@ -1,5 +1,16 @@
 from __future__ import annotations
 
+"""Main application runner for the ROI Tracker demo.
+
+This module contains the entry point and the main live loop that
+captures frames from a webcam, shows the GUI, and forwards frames
+to the `ROITracker` instance. It also contains small helpers for
+opening the camera and selecting a region of interest (ROI).
+
+Only user-facing UI and loop control live here; the tracking logic
+is implemented in `tracker.py`.
+"""
+
 import time
 from typing import Optional, Tuple
 
@@ -12,6 +23,13 @@ from utils import draw_status_panel, draw_transparent_box
 
 
 def open_camera(camera_index: int) -> cv2.VideoCapture:
+    """Open a system camera and return a cv2.VideoCapture object.
+
+    We try `CAP_DSHOW` first (works well on Windows). If that fails
+    we fall back to the default backend. This helper only opens the
+    device; it does not configure resolution or other capture settings.
+    """
+
     capture = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
     if not capture.isOpened():
         capture.release()
@@ -20,6 +38,15 @@ def open_camera(camera_index: int) -> cv2.VideoCapture:
 
 
 def select_roi(frame: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
+    """Show OpenCV's interactive ROI selector and return the picked box.
+
+    The selector is the small window that lets you drag a rectangle
+    with the mouse. After dragging, press SPACE or ENTER to confirm
+    the selection, or press `c` to cancel. The returned box is a
+    4-tuple `(x, y, w, h)` in pixel coordinates, or `None` when the
+    selection was canceled or invalid.
+    """
+
     print("OpenCV ROI selector: drag with the mouse, then press SPACE or ENTER to confirm. Press c to cancel.")
     selection = cv2.selectROI(config.WINDOW_NAME, frame, showCrosshair=True, fromCenter=False)
     if selection is None:
@@ -40,6 +67,12 @@ def build_status_lines(
     tracker_name: str,
     roi_keypoints: int,
 ) -> list[str]:
+    """Return a list of status strings to render in the UI panel.
+
+    This just formats the state and debug numbers (FPS, match counts,
+    tracker backend name and current ROI keypoint count) for display.
+    """
+
     lines = [f"STATUS: {state.value}"]
     if tracker_name:
         lines.append(f"TRACKER: {tracker_name}")
@@ -53,6 +86,17 @@ def build_status_lines(
 
 
 def main() -> None:
+    """Main application loop.
+
+    Responsibilities:
+    - Open the configured camera.
+    - Create an `ROITracker` instance and pass frames to it.
+    - Render overlays (bounding box, status panel) and handle key input.
+
+    The function intentionally keeps GUI code here and delegates all
+    tracking logic to `ROITracker` in `tracker.py`.
+    """
+
     camera = open_camera(config.CAMERA_INDEX)
     if not camera.isOpened():
         print(f"Could not open camera index {config.CAMERA_INDEX}. Try changing CAMERA_INDEX in config.py.")
@@ -72,6 +116,9 @@ def main() -> None:
 
         state, bbox, match_result = tracker.update(frame)
 
+        # Compute instantaneous FPS and apply simple exponential smoothing.
+        # Smoothing makes the displayed FPS less jumpy; `FPS_SMOOTHING` in
+        # config controls how much past measurements affect the shown value.
         current_time = time.perf_counter()
         delta_time = max(current_time - previous_time, 1e-6)
         previous_time = current_time
@@ -81,6 +128,8 @@ def main() -> None:
         else:
             smoothed_fps = config.FPS_SMOOTHING * smoothed_fps + (1.0 - config.FPS_SMOOTHING) * fps
 
+        # Copy the frame before drawing overlays so the raw `frame` stays
+        # available for tracker operations and debugging if needed.
         display_frame = frame.copy()
         if bbox is not None:
             box_color = config.BOX_COLOR_TRACKING
@@ -104,6 +153,7 @@ def main() -> None:
             ),
         )
 
+        # Show help text when there is no active target to guide beginners.
         if state == TrackerState.NO_TARGET:
             cv2.putText(
                 display_frame,

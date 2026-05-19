@@ -1,5 +1,22 @@
 from __future__ import annotations
 
+"""ROI tracking and redetection machinery.
+
+This module implements `ROITracker`, a thin state machine that wraps an
+OpenCV single-object tracker (CSRT/MOSSE/KCF/MIL) for frame-to-frame
+tracking and a fallback re-detection pipeline based on ORB feature
+matching + homography. The tracker exposes a simple `initialize_from_roi`
+and `update` API used by the main loop.
+
+Conceptual flow:
+- User selects an ROI -> we compute ORB keypoints/descriptors for the
+  ROI and build a template model.
+- We initialize an OpenCV tracker for fast real-time updates.
+- On each frame we call `tracker.update(frame)`; if the tracker fails
+  we run ORB-based re-detection across the whole frame and try to
+  rebuild the tracker from the re-detected bounding box.
+"""
+
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, Tuple
@@ -12,6 +29,15 @@ from utils import MatchResult, clamp_bbox, create_orb, extract_orb_features, mak
 
 
 class TrackerState(str, Enum):
+    """Simple tracker state machine values.
+
+    - `NO_TARGET`: no ROI selected.
+    - `TRACKING`: tracker is currently following the object.
+    - `LOST`: tracker failed for the current frame.
+    - `RE_DETECTED`: a re-detection produced a new ROI and the tracker
+      was rebuilt.
+    """
+
     NO_TARGET = "NO_TARGET"
     TRACKING = "TRACKING"
     LOST = "LOST"
@@ -20,6 +46,12 @@ class TrackerState(str, Enum):
 
 @dataclass
 class ROIModel:
+    """Stores template image, keypoints and descriptors for the ROI.
+
+    This is used by the redetection step: descriptors from the template
+    are matched against descriptors from the current frame.
+    """
+
     template_image: np.ndarray
     template_keypoints: list
     template_descriptors: Optional[np.ndarray]
@@ -27,19 +59,34 @@ class ROIModel:
 
 
 class ROITracker:
+    """Encapsulates tracking state and redetection logic.
+
+    Public methods:
+    - `initialize_from_roi(frame, bbox)` - build template and start tracker
+    - `update(frame)` - update tracker and attempt re-detection on failure
+    - `reset()` - clear state
+    """
+
     def __init__(self) -> None:
+        # Tracker state and CV helpers
         self.state = TrackerState.NO_TARGET
         self.orb = create_orb()
+        # BFMatcher with Hamming norm is appropriate for ORB binary descriptors
         self.matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+        # OpenCV single-object tracker instance (CSRT/MOSSE/KCF/MIL)
         self.tracker = None
         self.tracker_name: str = ""
+
+        # Template / model data used for re-detection
         self.roi_model: Optional[ROIModel] = None
         self.current_bbox: Optional[Tuple[int, int, int, int]] = None
         self.last_match_result = make_match_result(None, 0, 0)
         self.last_init_message: str = ""
+        # diagnostic: how many keypoints we found when initializing the ROI
         self.last_init_keypoints: int = 0
 
     def reset(self) -> None:
+        """Clear the tracker and template data, returning to NO_TARGET."""
         self.state = TrackerState.NO_TARGET
         self.tracker = None
         self.tracker_name = ""
@@ -50,6 +97,17 @@ class ROITracker:
         self.last_init_keypoints = 0
 
     def initialize_from_roi(self, frame: np.ndarray, bbox: Tuple[int, int, int, int]) -> bool:
+        """Initialize the ROI template and start an OpenCV tracker.
+
+        Steps:
+        1. Clamp and validate the supplied `bbox`.
+        2. Extract ORB keypoints/descriptors from the ROI; require a
+           minimum number of keypoints to proceed.
+        3. Build the `ROIModel` and try to initialize a fast OpenCV
+           single-object tracker (CSRT/MOSSE/KCF/MIL). If tracker
+           initialization fails we clean up and report failure.
+        """
+
         frame = np.ascontiguousarray(frame)
         valid_bbox = clamp_bbox(bbox, frame.shape)
         if valid_bbox is None:
@@ -61,6 +119,7 @@ class ROITracker:
             self.last_init_message = f"ROI too small (min {config.MIN_ROI_WIDTH}x{config.MIN_ROI_HEIGHT})"
             return False
 
+        # Extract template image and compute ORB features for the ROI.
         roi_image = frame[y : y + h, x : x + w].copy()
         template_keypoints, template_descriptors = extract_orb_features(roi_image, self.orb)
         self.last_init_keypoints = len(template_keypoints)
@@ -90,6 +149,16 @@ class ROITracker:
         return True
 
     def update(self, frame: np.ndarray) -> Tuple[TrackerState, Optional[Tuple[int, int, int, int]], MatchResult]:
+        """Update the tracker with the new `frame`.
+
+        Behavior:
+        - If the internal tracker reports success, validate the bbox and
+          return the `TRACKING` state.
+        - If tracking fails, move to `LOST` and attempt ORB-based
+          re-detection across the full frame. If re-detection succeeds
+          and we can reinitialize the tracker, return `RE_DETECTED`.
+        """
+
         frame = np.ascontiguousarray(frame)
         if self.state == TrackerState.NO_TARGET or self.tracker is None or self.current_bbox is None:
             return self.state, None, self.last_match_result
@@ -104,6 +173,7 @@ class ROITracker:
                     self.last_match_result = make_match_result(clamped_bbox, 0, 0)
                     return self.state, clamped_bbox, self.last_match_result
 
+        # Tracker failed for this frame - try redetection
         self.state = TrackerState.LOST
         match_result = self._attempt_redetection(frame)
         self.last_match_result = match_result
@@ -119,6 +189,14 @@ class ROITracker:
         return self.state, None, match_result
 
     def _is_tracking_valid(self, frame: np.ndarray, bbox: Tuple[int, int, int, int]) -> bool:
+        """Basic sanity checks to reduce drift onto blank/dark regions.
+
+        The checks include simple intensity statistics and a minimum
+        number of ORB keypoints inside the candidate bbox. This helps
+        avoid accepting spurious tracker updates when the camera view
+        is covered or the scene is textureless.
+        """
+
         x, y, w, h = bbox
         if w <= 0 or h <= 0:
             return False
@@ -142,6 +220,14 @@ class ROITracker:
         return True
 
     def _init_tracker(self, frame: np.ndarray, bbox: Tuple[int, int, int, int]):
+        """Try to create and initialize an OpenCV tracker backend.
+
+        Many OpenCV installations expose tracker constructors in either
+        the top-level module or the `cv2.legacy` namespace; this method
+        attempts common backends and returns the first successfully
+        initialized tracker instance and its name.
+        """
+
         tracker_factories = [
             ("CSRT", getattr(cv2, "TrackerCSRT_create", None)),
             ("CSRT", getattr(cv2, "legacy", None) and getattr(cv2.legacy, "TrackerCSRT_create", None)),
@@ -176,6 +262,22 @@ class ROITracker:
         return None, ""
 
     def _attempt_redetection(self, frame: np.ndarray) -> MatchResult:
+        """Try to find the ROI in the full `frame` using ORB matching.
+
+        Steps:
+        1. Extract ORB descriptors from the full frame.
+        2. Match template descriptors to frame descriptors using
+           knnMatch + Lowe ratio test to filter ambiguous matches.
+        3. If enough good matches are found, compute a homography with
+           RANSAC and count inliers to ensure spatial consistency.
+        4. If inliers are sufficient, project the template corners to
+           the frame and return the bounding box.
+
+        Re-detection can fail for several reasons: too few descriptor
+        matches (low texture), many repeated patterns (ambiguous matches),
+        or insufficient geometric agreement (homography RANSAC fails).
+        """
+
         if self.roi_model is None:
             return make_match_result(None, 0, 0)
 

@@ -1,5 +1,14 @@
 from __future__ import annotations
 
+"""Utility helpers used by the demo.
+
+Contains small wrappers for ORB creation and feature extraction, basic
+bounding-box clamping (ensuring coordinates stay inside the frame),
+and simple drawing helpers used by the GUI. These functions are small
+and intentionally kept independent of tracker logic so they are easy
+to read and test.
+"""
+
 from dataclasses import dataclass
 from typing import Optional, Sequence, Tuple
 
@@ -11,12 +20,25 @@ import config
 
 @dataclass
 class MatchResult:
+    """Result container for a re-detection attempt.
+
+    - `bbox`: detected bounding box or `None` when detection failed.
+    - `good_matches`: number of descriptor matches that passed the ratio test.
+    - `inliers`: number of inliers reported by RANSAC when computing homography.
+    """
+
     bbox: Optional[Tuple[int, int, int, int]]
     good_matches: int
     inliers: int
 
 
 def create_orb() -> cv2.ORB:
+    """Create and return an ORB detector configured from `config`.
+
+    ORB detects keypoints and computes binary descriptors. These
+    descriptors are matched with Hamming distance via a BFMatcher.
+    """
+
     return cv2.ORB_create(
         nfeatures=config.ORB_N_FEATURES,
         scaleFactor=config.ORB_SCALE_FACTOR,
@@ -31,12 +53,26 @@ def create_orb() -> cv2.ORB:
 
 
 def extract_orb_features(image: np.ndarray, orb: cv2.ORB):
+    """Detect ORB keypoints and compute descriptors for `image`.
+
+    The function accepts either a grayscale or BGR image. It returns
+    `(keypoints, descriptors)` where `descriptors` is a numpy array
+    (or `None` if no descriptors were found).
+    """
+
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
     keypoints, descriptors = orb.detectAndCompute(gray, None)
     return keypoints, descriptors
 
 
 def clamp_bbox(bbox: Sequence[float], frame_shape: Sequence[int]) -> Optional[Tuple[int, int, int, int]]:
+    """Clamp and sanitize a bounding box to fit inside the frame.
+
+    Input `bbox` may contain floats; this helper rounds coordinates and
+    ensures the box is inside `frame_shape`. Returns `None` for invalid
+    or degenerate boxes (zero or negative width/height).
+    """
+
     if len(frame_shape) < 2:
         return None
 
@@ -47,6 +83,7 @@ def clamp_bbox(bbox: Sequence[float], frame_shape: Sequence[int]) -> Optional[Tu
     if w <= 0 or h <= 0:
         return None
 
+    # Clamp coordinates so the box does not go outside the image
     x = max(0, min(x, frame_width - 1))
     y = max(0, min(y, frame_height - 1))
     w = min(w, frame_width - x)
@@ -59,6 +96,13 @@ def clamp_bbox(bbox: Sequence[float], frame_shape: Sequence[int]) -> Optional[Tu
 
 
 def draw_transparent_box(image: np.ndarray, bbox: Optional[Tuple[int, int, int, int]], color, alpha: float = 0.2) -> None:
+    """Draw a semi-transparent filled rectangle plus an outline.
+
+    This draws a translucent overlay for the tracked region so the
+    underlying frame is still visible. `alpha` controls the overlay
+    opacity (0.0 transparent, 1.0 opaque).
+    """
+
     if bbox is None:
         return
 
@@ -70,6 +114,12 @@ def draw_transparent_box(image: np.ndarray, bbox: Optional[Tuple[int, int, int, 
 
 
 def draw_status_panel(image: np.ndarray, lines: Sequence[str]) -> None:
+    """Render an on-screen status panel with the provided lines.
+
+    The function measures text sizes to build a background panel and then
+    draws each line with the configured font and colors from `config`.
+    """
+
     if not lines:
         return
 
@@ -101,4 +151,9 @@ def draw_status_panel(image: np.ndarray, lines: Sequence[str]) -> None:
 
 
 def make_match_result(bbox: Optional[Tuple[int, int, int, int]], good_matches: int, inliers: int) -> MatchResult:
+    """Simple factory to create a `MatchResult` value.
+
+    Used by the tracker when reporting re-detection outcomes.
+    """
+
     return MatchResult(bbox=bbox, good_matches=good_matches, inliers=inliers)

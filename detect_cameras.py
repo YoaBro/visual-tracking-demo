@@ -1,9 +1,10 @@
-"""
-Simple helper to probe camera indices on Windows.
-Run: python detect_cameras.py
+"""Probe available camera indices on Windows.
 
-It will try indices 0..8 and print which indexes open a frame.
+Run this helper to find which numeric camera index corresponds to your
+external webcam (for example a USB Logitech camera). The script will
+try indices 0..8 and print which ones open a frame.
 """
+
 import cv2
 
 MAX_INDEX = 8
