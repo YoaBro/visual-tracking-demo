@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from utils import clamp_bbox, make_match_result
+from utils import clamp_bbox, draw_thumbnail_pair, make_match_result
 
 
 class TestUtils(unittest.TestCase):
@@ -22,6 +22,13 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(result.bbox, (1, 2, 3, 4))
         self.assertEqual(result.good_matches, 10)
         self.assertEqual(result.inliers, 7)
+
+    def test_draw_thumbnail_pair_no_error(self):
+        canvas = np.zeros((200, 300, 3), dtype=np.uint8)
+        left = np.zeros((40, 40, 3), dtype=np.uint8)
+        right = np.zeros((40, 40, 3), dtype=np.uint8)
+        bottom_y = draw_thumbnail_pair(canvas, left, right, (10, 10), "ROI", "Current")
+        self.assertGreater(bottom_y, 0)
 
 
 if __name__ == "__main__":

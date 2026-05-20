@@ -1,6 +1,12 @@
 # ROI Tracker Demo
 
-A simple Windows-friendly Python/OpenCV desktop demo for real-time ROI tracking and basic re-detection from a webcam.
+A compact Windows-friendly Python/OpenCV desktop demo for selecting a region in a live webcam feed, tracking it frame-to-frame, and attempting feature-based re-detection after tracking is lost.
+
+## Purpose
+
+I built this project as a hands-on computer vision exercise to understand how an ROI-based tracking pipeline works in practice: webcam capture, manual ROI initialization, tracker state management, failure handling, ORB feature matching, and basic re-detection.
+
+The focus is on a small, inspectable implementation with clear runtime feedback and known limitations, rather than a production-grade tracker.
 
 ## What it does
 
@@ -52,6 +58,10 @@ If the webcam does not open, try changing `CAMERA_INDEX` in [config.py](config.p
 
 - `s` = select ROI
 - `r` = reset
+- `p` = save screenshot
+- `l` = toggle Learning Mode
+- `h` = toggle help panel
+- `g` = toggle event log
 - `q` = quit
 
 ## Status labels

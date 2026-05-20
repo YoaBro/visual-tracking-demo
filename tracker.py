@@ -322,3 +322,20 @@ class ROITracker:
         h = int(np.ceil(np.max(y_values) - np.min(y_values)))
         bbox = clamp_bbox((x, y, w, h), frame.shape)
         return make_match_result(bbox, len(good_matches), inliers)
+
+    # Informational accessors for Learning Mode (no logic changes)
+    def get_roi_thumbnail(self) -> Optional[np.ndarray]:
+        """Return a copy of the original ROI template image, or None."""
+
+        if self.roi_model is None:
+            return None
+        return self.roi_model.template_image.copy()
+
+    def get_current_match_confidence(self) -> int:
+        """Return a simple integer confidence value for the last match.
+
+        We expose the number of inliers from the last re-detection as a
+        lightweight confidence indicator for display in Learning Mode.
+        """
+
+        return int(self.last_match_result.inliers)

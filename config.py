@@ -63,3 +63,29 @@ TEXT_BG_ALPHA = 0.55
 
 # FPS smoothing factor in the main loop (0..1). Closer to 1 => smoother value.
 FPS_SMOOTHING = 0.9
+
+# Side panel layout settings (pixels)
+SIDE_PANEL_WIDTH = 300
+SIDE_PANEL_PADDING = 10
+PANEL_FONT_SCALE = 0.6
+PANEL_THICKNESS = 1
+PANEL_LINE_GAP = 6
+PANEL_SECTION_GAP = 10
+PANEL_BG_ALPHA = 0.75
+
+# Optional overlay panels
+HELP_PANEL_WIDTH = 420
+HELP_PANEL_HEIGHT = 150
+LOG_PANEL_HEIGHT = 140
+
+# Learning Mode thumbnails
+THUMBNAIL_SIZE = (120, 90)
+THUMBNAIL_GAP = 10
+
+# Short help text shown when the help panel is toggled on.
+HELP_TEXT = {
+	"NO_TARGET": "No ROI selected. Press 's' to pick a region to track.",
+	"TRACKING": "Tracking: the tracker follows the ROI each frame.",
+	"LOST": "Lost: tracking failed. Re-detection uses ORB matching.",
+	"RE-DETECTED": "Re-detected: a match was found and tracking resumed.",
+}

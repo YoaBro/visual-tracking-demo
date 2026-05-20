@@ -12,5 +12,6 @@ __pycache__/
 recordings/
 captures/
 screenshots/
+logs/
 tmp/
 temp/
