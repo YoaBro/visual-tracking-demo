@@ -18,17 +18,7 @@ The focus is on a small, inspectable implementation with clear runtime feedback 
 - Rebuilds the tracker when a good re-detection is found.
 
 ## Demo Screenshots
-
-Copy these five files from `captures/` into `docs/images/` and rename them:
-
-- `captures/capture_2026-05-20_18-02-04.png` -> `docs/images/01-roi-selected.png`
-- `captures/capture_2026-05-21_08-42-41.png` -> `docs/images/02-validated-tracking-before-loss.png`
-- `captures/capture_2026-05-21_08-43-09.png` -> `docs/images/03-lost-no-match.png`
-- `captures/capture_2026-05-21_08-43-52.png` -> `docs/images/04-reacquired-after-return.png`
-- `captures/capture_2026-05-21_08-44-59.png` -> `docs/images/05-unstable-redetection-lost-again.png`
-
-These screenshots are optional but recommended for a polished GitHub page.
-Note: These screenshots were captured during development tests and may not all be from the same continuous run.
+These screenshots were captured during development tests and may not all be from the same continuous run.
 
 ![ROI selection](docs/images/01-roi-selected.png)
 ![Validated tracking before loss](docs/images/02-validated-tracking-before-loss.png)
