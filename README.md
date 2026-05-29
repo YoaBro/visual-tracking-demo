@@ -31,7 +31,7 @@ Note: they are not all from the same continuous run.
 **Re-acquisition after return —** The tracker can re-acquire the target after returning to the area.
 <img src="docs/images/04-reacquired-after-return.png" width="800" />
 
-**Unstable re-detection (limitation) —** Re-detection is not always stable, and the ROI can be lost again.
+**Unstable re-detection (limitation) —** Re-detection is not always stable. Changes in viewpoint, scale, lighting, partial occlusion, or target appearance can cause the app to lose the ROI again.
 <img src="docs/images/05-unstable-redetection-lost-again.png" width="800" />
 
 ## Requirements
