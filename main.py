@@ -80,6 +80,12 @@ def build_status_lines(
     show_help: bool,
     show_log: bool,
     redetection_reason: Optional[str] = None,
+    # Tracking-validation diagnostics (optional)
+    track_matches: int = 0,
+    track_inliers: int = 0,
+    track_ratio: float = 0.0,
+    track_valid: bool = False,
+    track_fail_count: int = 0,
 ) -> list[str]:
     """Return a list of status strings to render in the UI panel.
 
@@ -94,6 +100,11 @@ def build_status_lines(
     lines.append(f"MATCHES: {match_count}  INLIERS: {inliers}")
     lines.append(f"FPS: {fps:.1f}")
     lines.append("")
+    # Show per-frame tracking validation diagnostics when a target exists.
+    if state != TrackerState.NO_TARGET:
+        lines.append(f"TRACK_VALID: {'YES' if track_valid else 'NO'}  FAILS: {track_fail_count}")
+        lines.append(f"TV MATCHES: {track_matches}  INLIERS: {track_inliers}  RATIO: {track_ratio:.2f}")
+        lines.append("")
     lines.append(f"LEARNING: {'ON' if learning_mode else 'OFF'} [l]")
     lines.append(f"HELP: {'ON' if show_help else 'OFF'} [h]")
     lines.append(f"LOG: {'ON' if show_log else 'OFF'} [g]")
@@ -220,7 +231,9 @@ def main() -> None:
         display_frame = frame.copy()
         if bbox is not None:
             box_color = config.BOX_COLOR_TRACKING
-            if state == TrackerState.LOST:
+            if state == TrackerState.SUSPECT:
+                box_color = config.BOX_COLOR_SUSPECT
+            elif state == TrackerState.LOST:
                 box_color = config.BOX_COLOR_LOST
             elif state == TrackerState.RE_DETECTED:
                 box_color = config.BOX_COLOR_REDETECTED
@@ -249,6 +262,11 @@ def main() -> None:
             ui_manager.show_help,
             ui_manager.show_log,
             redetection_reason,
+            tracker.last_track_validation_matches,
+            tracker.last_track_validation_inliers,
+            tracker.last_track_validation_ratio,
+            tracker.last_track_valid_confidence,
+            tracker.track_validation_failed_count,
         )
 
         panel_rect = (width, 0, panel_width, height)
@@ -272,6 +290,22 @@ def main() -> None:
                         match_present = match_thumbnail.size > 0
             if not match_present:
                 match_thumbnail = make_placeholder_thumbnail(config.THUMBNAIL_SIZE, "No match")
+
+            # Draw matching keypoints on the thumbnails if available.
+            match_points = getattr(tracker, "last_track_validation_match_points", None)
+            if match_points and tracker.roi_model is not None:
+                # Draw on the original ROI thumbnail (template coords).
+                try:
+                    for tpl_x, tpl_y, cur_x, cur_y, is_inlier in match_points:
+                        color = (0, 255, 0) if is_inlier else (0, 128, 255)
+                        cv2.circle(roi_thumbnail, (int(round(tpl_x)), int(round(tpl_y))), 3, color, thickness=-1)
+                    # Draw on the match thumbnail (current crop coords)
+                    for tpl_x, tpl_y, cur_x, cur_y, is_inlier in match_points:
+                        color = (0, 255, 0) if is_inlier else (0, 128, 255)
+                        cv2.circle(match_thumbnail, (int(round(cur_x)), int(round(cur_y))), 3, color, thickness=-1)
+                except Exception:
+                    # Drawing should never crash the main loop; ignore on error.
+                    pass
 
             thumbnail_status = (roi_present, match_present)
             if thumbnail_status != last_thumbnail_status:

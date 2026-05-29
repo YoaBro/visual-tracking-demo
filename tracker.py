@@ -33,6 +33,7 @@ class TrackerState(str, Enum):
 
     - `NO_TARGET`: no ROI selected.
     - `TRACKING`: tracker is currently following the object.
+    - `SUSPECT`: CSRT ok but visual validation weak (Phase 2); between TRACKING and LOST.
     - `LOST`: tracker failed for the current frame.
     - `RE_DETECTED`: a re-detection produced a new ROI and the tracker
       was rebuilt.
@@ -40,6 +41,7 @@ class TrackerState(str, Enum):
 
     NO_TARGET = "NO_TARGET"
     TRACKING = "TRACKING"
+    SUSPECT = "SUSPECT"
     LOST = "LOST"
     RE_DETECTED = "RE-DETECTED"
 
@@ -84,6 +86,28 @@ class ROITracker:
         self.last_init_message: str = ""
         # diagnostic: how many keypoints we found when initializing the ROI
         self.last_init_keypoints: int = 0
+        # Remember last valid bbox for spatial gating during re-detection
+        self.last_valid_bbox: Optional[Tuple[int, int, int, int]] = None
+        # Last confirmed bbox: only updated when TRACKING passes visual validation
+        # (Phase 3: protects from false tracking poisoning the re-detection state)
+        self.last_confirmed_bbox: Optional[Tuple[int, int, int, int]] = None
+        # Pending re-detection candidate confirmation
+        self.pending_redetect_bbox: Optional[Tuple[int, int, int, int]] = None
+        self.pending_redetect_count: int = 0
+        
+        # Tracking validation state (Phase 1–3): visual validation of current bbox
+        # against reference template to detect tracker drift during TRACKING state.
+        self.frame_since_last_track_validation: int = 0  # Counter for every-N-frames check
+        self.track_validation_failed_count: int = 0      # Cumulative failed validations
+        self.last_track_validation_matches: int = 0      # Debug: matches from last validation
+        self.last_track_validation_inliers: int = 0      # Debug: inliers from last validation
+        self.last_track_validation_ratio: float = 0.0    # Debug: inlier ratio from validation
+        self.last_track_valid_confidence: bool = True    # Debug: result of last validation
+        # Detailed per-match points for visualization: list of
+        # (template_pt_x, template_pt_y, current_pt_x, current_pt_y, is_inlier)
+        self.last_track_validation_match_points: list = []
+        # SUSPECT state duration: track how long we've been in SUSPECT
+        self.suspect_frame_count: int = 0
 
     def reset(self) -> None:
         """Clear the tracker and template data, returning to NO_TARGET."""
@@ -95,6 +119,18 @@ class ROITracker:
         self.last_match_result = make_match_result(None, 0, 0)
         self.last_init_message = ""
         self.last_init_keypoints = 0
+        self.last_valid_bbox = None
+        self.last_confirmed_bbox = None
+        self.pending_redetect_bbox = None
+        self.pending_redetect_count = 0
+        self.frame_since_last_track_validation = 0
+        self.track_validation_failed_count = 0
+        self.last_track_validation_matches = 0
+        self.last_track_validation_inliers = 0
+        self.last_track_validation_ratio = 0.0
+        self.last_track_valid_confidence = True
+        self.last_track_validation_match_points = []
+        self.suspect_frame_count = 0
 
     def initialize_from_roi(self, frame: np.ndarray, bbox: Tuple[int, int, int, int]) -> bool:
         """Initialize the ROI template and start an OpenCV tracker.
@@ -135,6 +171,7 @@ class ROITracker:
         )
 
         self.current_bbox = valid_bbox
+        self.last_valid_bbox = valid_bbox
         tracker_bbox = (int(x), int(y), int(w), int(h))
         self.tracker, self.tracker_name = self._init_tracker(frame, tracker_bbox)
         if self.tracker is None:
@@ -146,6 +183,11 @@ class ROITracker:
         self.state = TrackerState.TRACKING
         self.last_match_result = make_match_result(valid_bbox, 0, 0)
         self.last_init_message = ""
+        self.last_confirmed_bbox = valid_bbox
+        self.pending_redetect_bbox = None
+        self.pending_redetect_count = 0
+        self.track_validation_failed_count = 0
+        self.suspect_frame_count = 0
         return True
 
     def update(self, frame: np.ndarray) -> Tuple[TrackerState, Optional[Tuple[int, int, int, int]], MatchResult]:
@@ -169,24 +211,175 @@ class ROITracker:
             if clamped_bbox is not None:
                 if self._is_tracking_valid(frame, clamped_bbox):
                     self.current_bbox = clamped_bbox
+                    self.last_valid_bbox = clamped_bbox
+                    
+                    # Phase 1: Tracking validation debug (visual validation against reference).
+                    # Every N frames during TRACKING, validate the current bbox against the
+                    # reference template to detect tracker drift. Store results but don't
+                    # change state yet (behavior change deferred to Phase 3).
+                    self.frame_since_last_track_validation += 1
+                    if self.frame_since_last_track_validation >= config.TRACK_VALIDATE_EVERY_N_FRAMES:
+                        is_valid, matches, inliers, ratio = self._validate_tracking(frame, clamped_bbox)
+                        self.last_track_validation_matches = matches
+                        self.last_track_validation_inliers = inliers
+                        self.last_track_validation_ratio = ratio
+                        self.last_track_valid_confidence = is_valid
+                        
+                        # Phase 3: State transition logic based on validation results.
+                        if is_valid:
+                            # Validation passed: confirmed tracking.
+                            self.track_validation_failed_count = 0
+                            self.suspect_frame_count = 0
+                            self.last_confirmed_bbox = clamped_bbox
+                            self.state = TrackerState.TRACKING
+                        else:
+                            # Validation failed: increment failure counter.
+                            self.track_validation_failed_count += 1
+                            
+                            # Check if we should transition to SUSPECT.
+                            if self.track_validation_failed_count >= config.TRACK_MAX_FAILED_VALIDATIONS:
+                                if self.state == TrackerState.TRACKING:
+                                    # Transition TRACKING -> SUSPECT: visual validation weak.
+                                    self.state = TrackerState.SUSPECT
+                                    self.suspect_frame_count = 0
+                                elif self.state == TrackerState.SUSPECT:
+                                    # Already in SUSPECT, increment duration counter.
+                                    self.suspect_frame_count += 1
+                                    # After a few more failures in SUSPECT, go to LOST.
+                                    if self.suspect_frame_count >= config.TRACK_MAX_FAILED_VALIDATIONS:
+                                        self.state = TrackerState.LOST
+                        
+                        self.frame_since_last_track_validation = 0
+                    
                     self.state = TrackerState.TRACKING
                     self.last_match_result = make_match_result(clamped_bbox, 0, 0)
                     return self.state, clamped_bbox, self.last_match_result
 
         # Tracker failed for this frame - try redetection
+        # If in SUSPECT, transition to LOST on CSRT failure.
         self.state = TrackerState.LOST
         match_result = self._attempt_redetection(frame)
         self.last_match_result = match_result
-        if match_result.bbox is not None:
-            self.current_bbox = match_result.bbox
+        confirmed_bbox = self._confirm_redetection_candidate(match_result.bbox)
+        if confirmed_bbox is not None:
+            self.current_bbox = confirmed_bbox
+            self.last_valid_bbox = confirmed_bbox
+            self.last_confirmed_bbox = confirmed_bbox
             self.tracker, self.tracker_name = self._init_tracker(
-                frame, tuple(int(value) for value in match_result.bbox)
+                frame, tuple(int(value) for value in confirmed_bbox)
             )
             if self.tracker is not None:
                 self.state = TrackerState.RE_DETECTED
-                return self.state, match_result.bbox, match_result
+                self.track_validation_failed_count = 0
+                self.suspect_frame_count = 0
+                confirmed_result = make_match_result(confirmed_bbox, match_result.good_matches, match_result.inliers)
+                return self.state, confirmed_bbox, confirmed_result
+
+        if match_result.bbox is not None:
+            match_result = make_match_result(None, match_result.good_matches, match_result.inliers)
+            self.last_match_result = match_result
 
         return self.state, None, match_result
+
+    def _bbox_center(self, bbox: Tuple[int, int, int, int]) -> Tuple[float, float]:
+        x, y, w, h = bbox
+        return x + (w / 2.0), y + (h / 2.0)
+
+    def _bbox_area(self, bbox: Tuple[int, int, int, int]) -> float:
+        return float(max(bbox[2], 0) * max(bbox[3], 0))
+
+    def _bbox_iou(
+        self, first: Tuple[int, int, int, int], second: Tuple[int, int, int, int]
+    ) -> float:
+        ax, ay, aw, ah = first
+        bx, by, bw, bh = second
+        ax2, ay2 = ax + aw, ay + ah
+        bx2, by2 = bx + bw, by + bh
+
+        inter_x1 = max(ax, bx)
+        inter_y1 = max(ay, by)
+        inter_x2 = min(ax2, bx2)
+        inter_y2 = min(ay2, by2)
+        inter_w = max(0, inter_x2 - inter_x1)
+        inter_h = max(0, inter_y2 - inter_y1)
+        inter_area = inter_w * inter_h
+        if inter_area == 0:
+            return 0.0
+        union_area = (aw * ah) + (bw * bh) - inter_area
+        if union_area <= 0:
+            return 0.0
+        return inter_area / union_area
+
+    def _is_candidate_reasonable(self, bbox: Tuple[int, int, int, int], inliers: int, matches: int) -> bool:
+        if self.roi_model is None:
+            return False
+
+        if matches <= 0:
+            return False
+
+        inlier_ratio = inliers / max(matches, 1)
+        if inlier_ratio < config.MIN_HOMOGRAPHY_INLIER_RATIO:
+            return False
+
+        template_w, template_h = self.roi_model.template_size
+        template_area = float(template_w * template_h)
+        candidate_area = self._bbox_area(bbox)
+        if template_area <= 0 or candidate_area <= 0:
+            return False
+
+        area_ratio = candidate_area / template_area
+        if area_ratio < config.MIN_REDETECT_AREA_RATIO or area_ratio > config.MAX_REDETECT_AREA_RATIO:
+            return False
+
+        template_ar = template_w / max(template_h, 1)
+        candidate_ar = bbox[2] / max(bbox[3], 1)
+        ar_ratio = max(candidate_ar / template_ar, template_ar / candidate_ar)
+        if ar_ratio > (1.0 + config.MAX_REDETECT_ASPECT_RATIO_DELTA):
+            return False
+
+        if self.last_valid_bbox is not None:
+            last_cx, last_cy = self._bbox_center(self.last_valid_bbox)
+            cand_cx, cand_cy = self._bbox_center(bbox)
+            distance = float(np.hypot(cand_cx - last_cx, cand_cy - last_cy))
+            ref_size = float(max(template_w, template_h))
+            if ref_size > 0:
+                if distance / ref_size > config.MAX_REDETECT_CENTER_DISTANCE_RATIO:
+                    return False
+
+        return True
+
+    def _confirm_redetection_candidate(
+        self, bbox: Optional[Tuple[int, int, int, int]]
+    ) -> Optional[Tuple[int, int, int, int]]:
+        if bbox is None or self.last_match_result is None:
+            self.pending_redetect_bbox = None
+            self.pending_redetect_count = 0
+            return None
+
+        if not self._is_candidate_reasonable(bbox, self.last_match_result.inliers, self.last_match_result.good_matches):
+            self.pending_redetect_bbox = None
+            self.pending_redetect_count = 0
+            return None
+
+        if self.pending_redetect_bbox is None:
+            self.pending_redetect_bbox = bbox
+            self.pending_redetect_count = 1
+            return None
+
+        iou = self._bbox_iou(self.pending_redetect_bbox, bbox)
+        if iou >= 0.3:
+            self.pending_redetect_count += 1
+        else:
+            self.pending_redetect_bbox = bbox
+            self.pending_redetect_count = 1
+
+        if self.pending_redetect_count >= config.REDETECT_CONFIRM_FRAMES:
+            confirmed = self.pending_redetect_bbox
+            self.pending_redetect_bbox = None
+            self.pending_redetect_count = 0
+            return confirmed
+
+        return None
 
     def _is_tracking_valid(self, frame: np.ndarray, bbox: Tuple[int, int, int, int]) -> bool:
         """Basic sanity checks to reduce drift onto blank/dark regions.
@@ -322,6 +515,94 @@ class ROITracker:
         h = int(np.ceil(np.max(y_values) - np.min(y_values)))
         bbox = clamp_bbox((x, y, w, h), frame.shape)
         return make_match_result(bbox, len(good_matches), inliers)
+
+    def _validate_tracking(
+        self, frame: np.ndarray, current_bbox: Tuple[int, int, int, int]
+    ) -> Tuple[bool, int, int, float]:
+        """Validate the current tracked bbox against the reference template.
+
+        This method compares the current bbox (from CSRT tracker output) to the
+        original reference ROI using ORB feature matching. It helps detect
+        tracker drift onto wrong regions during TRACKING state.
+
+        Phase 1–3 improvement: visual validation during tracking, not just re-detection.
+
+        Args:
+            frame: The current frame (BGR image).
+            current_bbox: The current bounding box from CSRT tracker (x, y, w, h).
+
+        Returns:
+            Tuple of (is_valid, matches, inliers, inlier_ratio):
+            - is_valid (bool): True if current bbox passes validation.
+            - matches (int): Number of good feature matches found.
+            - inliers (int): Number of RANSAC inliers.
+            - inlier_ratio (float): inliers / matches ratio, or 0.0 if no matches.
+        """
+
+        if self.roi_model is None:
+            return False, 0, 0, 0.0
+
+        # Extract ROI crop from current frame using the current bbox.
+        x, y, w, h = current_bbox
+        if w <= 0 or h <= 0 or y + h > frame.shape[0] or x + w > frame.shape[1]:
+            return False, 0, 0, 0.0
+
+        current_roi = frame[y : y + h, x : x + w].copy()
+        if current_roi.size == 0:
+            return False, 0, 0, 0.0
+
+        # Extract ORB features from the current bbox.
+        current_keypoints, current_descriptors = extract_orb_features(current_roi, self.orb)
+        if current_descriptors is None or len(current_keypoints) < 4:
+            return False, 0, 0, 0.0
+
+        # Match current crop descriptors against template descriptors.
+        matches = self.matcher.knnMatch(self.roi_model.template_descriptors, current_descriptors, k=2)
+        good_matches = []
+        for pair in matches:
+            if len(pair) < 2:
+                continue
+            first, second = pair
+            if first.distance < config.RATIO_TEST * second.distance:
+                good_matches.append(first)
+
+        if len(good_matches) < config.TRACK_MIN_MATCHES:
+            # clear any previous match points
+            self.last_track_validation_match_points = []
+            return False, len(good_matches), 0, 0.0
+
+        # Compute homography with RANSAC to validate spatial consistency.
+        template_points = np.float32(
+            [self.roi_model.template_keypoints[match.queryIdx].pt for match in good_matches]
+        ).reshape(-1, 1, 2)
+        current_points = np.float32(
+            [current_keypoints[match.trainIdx].pt for match in good_matches]
+        ).reshape(-1, 1, 2)
+
+        homography, inlier_mask = cv2.findHomography(template_points, current_points, cv2.RANSAC, 5.0)
+        if homography is None or inlier_mask is None:
+            self.last_track_validation_match_points = []
+            return False, len(good_matches), 0, 0.0
+
+        inliers = int(inlier_mask.ravel().sum())
+        inlier_ratio = inliers / max(len(good_matches), 1)
+        # Build detailed per-match list for visualization. Note: template pts
+        # are relative to the template image, current pts are relative to the
+        # cropped `current_roi` (we'll add bbox offsets when drawing in the UI).
+        match_points = []
+        for i, match in enumerate(good_matches):
+            tpl_pt = self.roi_model.template_keypoints[match.queryIdx].pt
+            cur_pt = current_keypoints[match.trainIdx].pt
+            is_inlier = bool(inlier_mask.ravel()[i])
+            match_points.append((float(tpl_pt[0]), float(tpl_pt[1]), float(cur_pt[0]), float(cur_pt[1]), is_inlier))
+        self.last_track_validation_match_points = match_points
+
+        # Validation passes if both inlier count and ratio thresholds are met.
+        is_valid = (
+            inliers >= config.TRACK_MIN_INLIERS
+            and inlier_ratio >= config.TRACK_MIN_INLIER_RATIO
+        )
+        return is_valid, len(good_matches), inliers, inlier_ratio
 
     # Informational accessors for Learning Mode (no logic changes)
     def get_roi_thumbnail(self) -> Optional[np.ndarray]:
