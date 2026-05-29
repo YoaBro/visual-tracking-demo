@@ -17,6 +17,32 @@ The focus is on a small, inspectable implementation with clear runtime feedback 
 - Tries to re-detect the original ROI using ORB feature matching.
 - Rebuilds the tracker when a good re-detection is found.
 
+## Demo Screenshots
+
+Copy these five files from `captures/` into `docs/images/` and rename them:
+
+- `captures/capture_2026-05-20_18-02-04.png` -> `docs/images/01-roi-selected.png`
+- `captures/capture_2026-05-21_08-42-41.png` -> `docs/images/02-validated-tracking-before-loss.png`
+- `captures/capture_2026-05-21_08-43-09.png` -> `docs/images/03-lost-no-match.png`
+- `captures/capture_2026-05-21_08-43-52.png` -> `docs/images/04-reacquired-after-return.png`
+- `captures/capture_2026-05-21_08-44-59.png` -> `docs/images/05-unstable-redetection-lost-again.png`
+
+These screenshots are optional but recommended for a polished GitHub page.
+Note: These screenshots were captured during development tests and may not all be from the same continuous run.
+
+![ROI selection](docs/images/01-roi-selected.png)
+![Validated tracking before loss](docs/images/02-validated-tracking-before-loss.png)
+![Lost / no match state](docs/images/03-lost-no-match.png)
+![Re-acquisition after return](docs/images/04-reacquired-after-return.png)
+![Unstable re-detection / lost again](docs/images/05-unstable-redetection-lost-again.png)
+
+Short captions:
+- ROI selection – The user manually selects a Region of Interest (ROI).
+- Validated tracking – The ROI is tracked while still visible, with debug validation metrics.
+- Lost / no-match state – The ROI is no longer confidently visible, so the app switches to a lost/searching state.
+- Re-acquisition after return – The tracker can re-acquire the region after returning toward the target area.
+- Unstable re-detection / limitation – Re-detection is not always stable, and the ROI can be lost again.
+
 ## Requirements
 
 - Windows 11
@@ -87,3 +113,5 @@ If the webcam does not open, try changing `CAMERA_INDEX` in [config.py](config.p
 - Large viewpoint, scale, blur, or lighting changes may prevent recovery.
 - The demo works best with textured ROIs that have many visual features.
 - This is a practical MVP, not a production tracker.
+
+
