@@ -23,16 +23,24 @@ Note: they are not all from the same continuous run.
 
 
 **Validated tracking —** The target is tracked while visible; validation metrics confirm the match.
-<img src="docs/images/02-validated-tracking-before-loss.png" width="800" />
+<p align="center">
+    <img src="docs/images/02-validated-tracking-before-loss.png" width="650" />
+</p>
 
 **Lost / no match —** The ROI is no longer confidently visible, so the app switches to a lost/searching state.
-<img src="docs/images/03-lost-no-match.png" width="800" />
+<p align="center">
+    <img src="docs/images/03-lost-no-match.png" width="650" />
+</p>
 
 **Re-acquisition after return —** The tracker can re-acquire the target after returning to the area.
-<img src="docs/images/04-reacquired-after-return.png" width="800" />
+<p align="center">
+    <img src="docs/images/04-reacquired-after-return.png" width="650" />
+</p>
 
 **Unstable re-detection (limitation) —** Re-detection is not always stable. Changes in viewpoint, scale, lighting, partial occlusion, or target appearance can cause the app to lose the ROI again.
-<img src="docs/images/05-unstable-redetection-lost-again.png" width="800" />
+<p align="center">
+    <img src="docs/images/05-unstable-redetection-lost-again.png" width="650" />
+</p>
 
 ## Requirements
 
