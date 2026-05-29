@@ -18,7 +18,7 @@ The focus is on a small, inspectable implementation with clear runtime feedback 
 - Rebuilds the tracker when a good re-detection is found.
 
 ## Demo Screenshots
-These screenshots were captured during development tests and may not all be from the same continuous run.
+The screenshots below show the main behavior observed during development tests (Note: not all be from the same continuous run).
 
 **ROI selection —** Manual selection of the Region of Interest (ROI).
 <img src="docs/images/01-roi-selected.png" width="800" />
