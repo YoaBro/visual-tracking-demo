@@ -20,18 +20,20 @@ The focus is on a small, inspectable implementation with clear runtime feedback 
 ## Demo Screenshots
 These screenshots were captured during development tests and may not all be from the same continuous run.
 
-![ROI selection](docs/images/01-roi-selected.png)
-![Validated tracking before loss](docs/images/02-validated-tracking-before-loss.png)
-![Lost / no match state](docs/images/03-lost-no-match.png)
-![Re-acquisition after return](docs/images/04-reacquired-after-return.png)
-![Unstable re-detection / lost again](docs/images/05-unstable-redetection-lost-again.png)
+**ROI selection —** Manual selection of the Region of Interest (ROI).
+<img src="docs/images/01-roi-selected.png" width="800" />
 
-Short captions:
-- ROI selection – The user manually selects a Region of Interest (ROI).
-- Validated tracking – The ROI is tracked while still visible, with debug validation metrics.
-- Lost / no-match state – The ROI is no longer confidently visible, so the app switches to a lost/searching state.
-- Re-acquisition after return – The tracker can re-acquire the region after returning toward the target area.
-- Unstable re-detection / limitation – Re-detection is not always stable, and the ROI can be lost again.
+**Validated tracking —** The target is tracked while visible; validation metrics confirm the match.
+<img src="docs/images/02-validated-tracking-before-loss.png" width="800" />
+
+**Lost / no match —** The ROI is no longer confidently visible, so the app switches to a lost/searching state.
+<img src="docs/images/03-lost-no-match.png" width="800" />
+
+**Re-acquisition after return —** The tracker can re-acquire the target after returning to the area.
+<img src="docs/images/04-reacquired-after-return.png" width="800" />
+
+**Unstable re-detection (limitation) —** Re-detection is not always stable, and the ROI can be lost again.
+<img src="docs/images/05-unstable-redetection-lost-again.png" width="800" />
 
 ## Requirements
 
