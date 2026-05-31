@@ -27,6 +27,7 @@ class MatchResult:
     - `inliers`: number of inliers reported by RANSAC when computing homography.
     """
 
+    # bbox is None when re-detection fails for the current frame.
     bbox: Optional[Tuple[int, int, int, int]]
     good_matches: int
     inliers: int
@@ -83,7 +84,7 @@ def clamp_bbox(bbox: Sequence[float], frame_shape: Sequence[int]) -> Optional[Tu
     if w <= 0 or h <= 0:
         return None
 
-    # Clamp coordinates so the box does not go outside the image
+    # Clamp coordinates so the box does not go outside the image.
     x = max(0, min(x, frame_width - 1))
     y = max(0, min(y, frame_height - 1))
     w = min(w, frame_width - x)
@@ -183,6 +184,7 @@ def draw_side_panel(
     if not lines:
         return panel_rect[1]
 
+    # panel_rect defines where the side panel is drawn in the larger canvas.
     x, y, width, height = panel_rect
     overlay = image.copy()
     cv2.rectangle(overlay, (x, y), (x + width, y + height), config.TEXT_BG_COLOR, thickness=-1)
@@ -228,6 +230,7 @@ def draw_help_panel(
     if not lines:
         return
 
+    # Uses the same layout logic as the side panel, but is smaller.
     x, y, width, height = panel_rect
     overlay = image.copy()
     cv2.rectangle(overlay, (x, y), (x + width, y + height), config.TEXT_BG_COLOR, thickness=-1)
@@ -284,6 +287,7 @@ def draw_thumbnail_pair(
     gap = config.THUMBNAIL_GAP
     x, y = origin
 
+    # Ensure the thumbnail pair fits on the canvas before drawing.
     canvas_height, canvas_width = image.shape[:2]
     total_width = (2 * thumb_width) + gap
     if x < 0 or y < 0 or x + total_width > canvas_width or y + thumb_height > canvas_height:

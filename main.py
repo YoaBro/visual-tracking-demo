@@ -40,6 +40,8 @@ def open_camera(camera_index: int) -> cv2.VideoCapture:
     device; it does not configure resolution or other capture settings.
     """
 
+    # Prefer the DirectShow backend on Windows because it is more stable
+    # for webcams; fall back to the default backend if it fails.
     capture = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
     if not capture.isOpened():
         capture.release()
@@ -57,6 +59,8 @@ def select_roi(frame: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
     selection was canceled or invalid.
     """
 
+    # This uses OpenCV's built-in selector window so the user can define
+    # a target region. It blocks until the user confirms or cancels.
     print("OpenCV ROI selector: drag with the mouse, then press SPACE or ENTER to confirm. Press c to cancel.")
     selection = cv2.selectROI(config.WINDOW_NAME, frame, showCrosshair=True, fromCenter=False)
     if selection is None:
@@ -93,6 +97,8 @@ def build_status_lines(
     tracker backend name and current ROI keypoint count) for display.
     """
 
+    # The status panel is built as a list of strings; draw_side_panel
+    # handles layout, wrapping, and rendering.
     lines = [f"STATE: {state.value} [?]"]
     lines.append(f"TRACKER: {tracker_name or '-'}")
     lines.append(f"ROI KP: {roi_keypoints}")
@@ -166,17 +172,24 @@ def main() -> None:
     tracking logic to `ROITracker` in `tracker.py`.
     """
 
+    # ---- Startup: open camera and allocate stateful components ----
+    # The tracking logic is delegated to ROITracker; main() focuses on
+    # frame acquisition, UI rendering, and keyboard input.
     camera = open_camera(config.CAMERA_INDEX)
     if not camera.isOpened():
         print(f"Could not open camera index {config.CAMERA_INDEX}. Try changing CAMERA_INDEX in config.py.")
         return
 
+    # ROITracker maintains the tracking state machine and re-detection logic.
     tracker = ROITracker()
+    # UIManager keeps user toggles (learning mode, help panel, log view).
     ui_manager = UIManager()
+    # EventLogger collects session events for on-screen log and file save.
     event_logger = EventLogger()
     event_logger.log_event("app_started")
     cv2.namedWindow(config.WINDOW_NAME, cv2.WINDOW_NORMAL)
 
+    # Timing variables for FPS display (smoothed to avoid jitter).
     previous_time = time.perf_counter()
     smoothed_fps = 0.0
     last_state = tracker.state
@@ -185,13 +198,18 @@ def main() -> None:
     last_thumbnail_status = None
 
     while True:
+        # ---- Frame acquisition ----
         ok, frame = camera.read()
         if not ok or frame is None:
             print("Failed to read from webcam.")
             break
 
+        # ---- Core tracking update ----
+        # tracker.update() returns: current state, current bbox, and
+        # match diagnostics from re-detection or validation.
         state, bbox, match_result = tracker.update(frame)
         if state != last_state:
+            # Log state transitions and re-detection attempts for visibility.
             if state == TrackerState.LOST:
                 event_logger.log_event("tracking_lost")
                 event_logger.log_event(
@@ -214,6 +232,7 @@ def main() -> None:
                 )
             last_state = state
 
+        # ---- Timing / FPS ----
         # Compute instantaneous FPS and apply simple exponential smoothing.
         # Smoothing makes the displayed FPS less jumpy; `FPS_SMOOTHING` in
         # config controls how much past measurements affect the shown value.
@@ -226,10 +245,13 @@ def main() -> None:
         else:
             smoothed_fps = config.FPS_SMOOTHING * smoothed_fps + (1.0 - config.FPS_SMOOTHING) * fps
 
+        # ---- Rendering: draw overlays on a copy ----
         # Copy the frame before drawing overlays so the raw `frame` stays
         # available for tracker operations and debugging if needed.
         display_frame = frame.copy()
         if bbox is not None:
+            # Color encodes state so the user can see whether tracking is
+            # confident, suspect, lost, or re-detected.
             box_color = config.BOX_COLOR_TRACKING
             if state == TrackerState.SUSPECT:
                 box_color = config.BOX_COLOR_SUSPECT
@@ -241,6 +263,9 @@ def main() -> None:
         elif state == TrackerState.NO_TARGET:
             draw_transparent_box(display_frame, None, config.BOX_COLOR_IDLE)
 
+        # ---- Side panel canvas ----
+        # The UI is drawn on a wider canvas: live video on the left, status
+        # panel on the right.
         panel_width = config.SIDE_PANEL_WIDTH
         panel_padding = config.SIDE_PANEL_PADDING
         height, width = display_frame.shape[:2]
@@ -251,6 +276,7 @@ def main() -> None:
         if ui_manager.learning_mode and state == TrackerState.LOST and match_result.bbox is None:
             redetection_reason = describe_redetection_failure(match_result.good_matches, match_result.inliers)
 
+        # Status lines are pure text; draw_side_panel handles layout.
         status_lines = build_status_lines(
             state,
             match_result.good_matches,
@@ -273,6 +299,9 @@ def main() -> None:
         text_bottom = draw_side_panel(display_canvas, status_lines, panel_rect)
 
         if ui_manager.learning_mode:
+            # ---- Learning Mode ----
+            # Shows template ROI and current match thumbnails plus keypoint
+            # visualization to help users understand the matching pipeline.
             roi_thumbnail = tracker.get_roi_thumbnail()
             roi_present = roi_thumbnail is not None and roi_thumbnail.size > 0
             if not roi_present:
@@ -333,6 +362,8 @@ def main() -> None:
                 )
 
         if ui_manager.show_log:
+            # ---- Event log panel ----
+            # Shows recent events captured by EventLogger.
             log_lines = event_logger.get_recent_events()
             log_panel_width = panel_width - (panel_padding * 2)
             log_panel_x = width + panel_padding
@@ -341,6 +372,8 @@ def main() -> None:
             draw_event_log_panel(display_canvas, log_lines, log_panel_rect)
 
         if ui_manager.show_help:
+            # ---- Help panel ----
+            # Short, user-facing explanation of the current state.
             help_lines = [f"STATE: {state.value}", get_help_text(state)]
             help_lines.append("ROI = Region of Interest (selected box).")
             help_lines.append("Matches = ORB descriptor pairs.")
@@ -354,6 +387,7 @@ def main() -> None:
             )
             draw_help_panel(display_canvas, help_lines, help_panel_rect)
 
+        # ---- Toast message (short-lived overlay) ----
         if toast_message and time.perf_counter() < toast_expires_at:
             (text_width, text_height), baseline = cv2.getTextSize(
                 toast_message, config.STATUS_FONT, config.PANEL_FONT_SCALE, config.PANEL_THICKNESS
@@ -395,20 +429,26 @@ def main() -> None:
                 cv2.LINE_AA,
             )
 
+        # ---- Present frame and handle keys ----
+        # Key handling is immediate and stateful; each key maps to one
+        # action (select, reset, snapshot, toggle panels, quit).
         cv2.imshow(config.WINDOW_NAME, display_canvas)
         key = cv2.waitKey(1) & 0xFF
 
         if key == ord("q"):
+            # Quit: persist the session log then exit the loop.
             event_logger.log_event("quit")
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             event_logger.save_to_file(f"logs/session_{timestamp}.txt")
             break
         if key == ord("r"):
+            # Reset: discard current target and tracker state.
             tracker.reset()
             event_logger.log_event("reset")
             last_state = tracker.state
             continue
         if key == ord("s"):
+            # Select a new ROI using OpenCV's GUI selector.
             selected_bbox = select_roi(frame)
             if selected_bbox is None:
                 print("ROI selection canceled or invalid. Drag a box, then press SPACE or ENTER to confirm.")
@@ -439,6 +479,7 @@ def main() -> None:
                 event_logger.log_event("tracker_initialized", tracker.tracker_name or "unknown")
 
         if key == ord("p"):
+            # Save a screenshot of the full UI canvas.
             success, message = save_screenshot(display_canvas)
             toast_message = "Screenshot saved" if success else message
             toast_expires_at = time.perf_counter() + 1.5
@@ -446,14 +487,19 @@ def main() -> None:
                 event_logger.log_event("screenshot_saved", message)
 
         if key == ord("l"):
+            # Toggle Learning Mode (extra visualization panels).
             ui_manager.toggle_learning_mode()
 
         if key == ord("h"):
+            # Toggle the help overlay.
             ui_manager.toggle_help_panel()
 
         if key == ord("g"):
+            # Toggle the event log panel.
             ui_manager.toggle_log_view()
 
+    # ---- Shutdown ----
+    # Always release the camera and destroy the OpenCV window.
     camera.release()
     cv2.destroyAllWindows()
 

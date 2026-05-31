@@ -17,7 +17,7 @@ WINDOW_NAME = "ROI Tracker Demo"
 MIN_ROI_WIDTH = 40
 MIN_ROI_HEIGHT = 40
 
-# Matching / redetection thresholds
+# Matching / redetection thresholds (used by ROITracker re-detection)
 # Minimum number of "good" descriptor matches before attempting homography.
 MIN_GOOD_MATCHES = 12
 # Lowe's ratio test constant for filtering ambiguous descriptor matches.
@@ -69,7 +69,7 @@ TRACK_MIN_INLIER_RATIO = 0.35
 # Number of consecutive validation failures before entering SUSPECT state.
 TRACK_MAX_FAILED_VALIDATIONS = 3
 
-# Status panel and drawing parameters
+# Status panel and drawing parameters (used by main.py overlays)
 STATUS_TEXT_ORIGIN = (10, 28)
 STATUS_FONT = 0
 STATUS_FONT_SCALE = 0.7
@@ -98,7 +98,7 @@ PANEL_LINE_GAP = 6
 PANEL_SECTION_GAP = 10
 PANEL_BG_ALPHA = 0.75
 
-# Optional overlay panels
+# Optional overlay panels (help/log panels)
 HELP_PANEL_WIDTH = 420
 HELP_PANEL_HEIGHT = 150
 LOG_PANEL_HEIGHT = 140

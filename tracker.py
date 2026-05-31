@@ -111,6 +111,7 @@ class ROITracker:
 
     def reset(self) -> None:
         """Clear the tracker and template data, returning to NO_TARGET."""
+        # This clears all state so the next update() behaves like a fresh run.
         self.state = TrackerState.NO_TARGET
         self.tracker = None
         self.tracker_name = ""
@@ -144,6 +145,7 @@ class ROITracker:
            initialization fails we clean up and report failure.
         """
 
+        # OpenCV tracker init expects contiguous arrays and valid coordinates.
         frame = np.ascontiguousarray(frame)
         valid_bbox = clamp_bbox(bbox, frame.shape)
         if valid_bbox is None:
@@ -156,6 +158,8 @@ class ROITracker:
             return False
 
         # Extract template image and compute ORB features for the ROI.
+        # These descriptors become the reference used for validation and
+        # re-detection when tracking fails.
         roi_image = frame[y : y + h, x : x + w].copy()
         template_keypoints, template_descriptors = extract_orb_features(roi_image, self.orb)
         self.last_init_keypoints = len(template_keypoints)
@@ -170,9 +174,11 @@ class ROITracker:
             template_size=(w, h),
         )
 
+        # Save current bbox so the tracker can update from this starting point.
         self.current_bbox = valid_bbox
         self.last_valid_bbox = valid_bbox
         tracker_bbox = (int(x), int(y), int(w), int(h))
+        # Try OpenCV tracker backends in priority order.
         self.tracker, self.tracker_name = self._init_tracker(frame, tracker_bbox)
         if self.tracker is None:
             self.roi_model = None
@@ -180,6 +186,7 @@ class ROITracker:
             self.last_init_message = "All tracker backends failed to initialize"
             return False
 
+        # After successful init, the state machine moves to TRACKING.
         self.state = TrackerState.TRACKING
         self.last_match_result = make_match_result(valid_bbox, 0, 0)
         self.last_init_message = ""
@@ -201,30 +208,39 @@ class ROITracker:
           and we can reinitialize the tracker, return `RE_DETECTED`.
         """
 
+        # Main state machine entry point for every frame from main.py.
+        # This method returns (state, bbox, match_result) for UI display.
         frame = np.ascontiguousarray(frame)
         if self.state == TrackerState.NO_TARGET or self.tracker is None or self.current_bbox is None:
             return self.state, None, self.last_match_result
 
+        # Phase 0: Run the fast OpenCV tracker to predict the next bbox.
         ok, tracked_bbox = self.tracker.update(frame)
         if ok:
             clamped_bbox = clamp_bbox(tracked_bbox, frame.shape)
             if clamped_bbox is not None:
+                # Lightweight sanity checks to avoid obvious drift.
                 if self._is_tracking_valid(frame, clamped_bbox):
                     self.current_bbox = clamped_bbox
                     self.last_valid_bbox = clamped_bbox
                     
+                    # Phase 1: Visual validation every N frames.
                     # Phase 1: Tracking validation debug (visual validation against reference).
                     # Every N frames during TRACKING, validate the current bbox against the
                     # reference template to detect tracker drift. Store results but don't
-                    # change state yet (behavior change deferred to Phase 3).
+                    # change state yet (behavior change deferred to Phase 3 counters).
                     self.frame_since_last_track_validation += 1
                     if self.frame_since_last_track_validation >= config.TRACK_VALIDATE_EVERY_N_FRAMES:
+                        # Phase 2: compute match/inlier stats between current crop and template.
                         is_valid, matches, inliers, ratio = self._validate_tracking(frame, clamped_bbox)
                         self.last_track_validation_matches = matches
                         self.last_track_validation_inliers = inliers
                         self.last_track_validation_ratio = ratio
                         self.last_track_valid_confidence = is_valid
                         
+                        # Phase 3: Update counters and internal state based on validation
+                        # outcomes. The method still returns TRACKING when the tracker
+                        # update itself is accepted for this frame.
                         # Phase 3: State transition logic based on validation results.
                         if is_valid:
                             # Validation passed: confirmed tracking.
@@ -251,20 +267,24 @@ class ROITracker:
                         
                         self.frame_since_last_track_validation = 0
                     
+                    # If we made it here, tracker update is accepted for this frame.
                     self.state = TrackerState.TRACKING
                     self.last_match_result = make_match_result(clamped_bbox, 0, 0)
                     return self.state, clamped_bbox, self.last_match_result
 
         # Tracker failed for this frame - try redetection
+        # Re-detection uses ORB matching against the saved ROI template.
         # If in SUSPECT, transition to LOST on CSRT failure.
         self.state = TrackerState.LOST
         match_result = self._attempt_redetection(frame)
         self.last_match_result = match_result
+        # Require multiple consistent frames before accepting a re-detection.
         confirmed_bbox = self._confirm_redetection_candidate(match_result.bbox)
         if confirmed_bbox is not None:
             self.current_bbox = confirmed_bbox
             self.last_valid_bbox = confirmed_bbox
             self.last_confirmed_bbox = confirmed_bbox
+            # Rebuild the OpenCV tracker so future frames are fast again.
             self.tracker, self.tracker_name = self._init_tracker(
                 frame, tuple(int(value) for value in confirmed_bbox)
             )
@@ -311,6 +331,7 @@ class ROITracker:
         return inter_area / union_area
 
     def _is_candidate_reasonable(self, bbox: Tuple[int, int, int, int], inliers: int, matches: int) -> bool:
+        # Heuristic filters to avoid unstable re-detections.
         if self.roi_model is None:
             return False
 
@@ -351,6 +372,7 @@ class ROITracker:
     def _confirm_redetection_candidate(
         self, bbox: Optional[Tuple[int, int, int, int]]
     ) -> Optional[Tuple[int, int, int, int]]:
+        # Temporal confirmation prevents single-frame false positives.
         if bbox is None or self.last_match_result is None:
             self.pending_redetect_bbox = None
             self.pending_redetect_count = 0
@@ -390,6 +412,7 @@ class ROITracker:
         is covered or the scene is textureless.
         """
 
+        # Fast sanity checks to reject clearly bad tracker outputs.
         x, y, w, h = bbox
         if w <= 0 or h <= 0:
             return False
@@ -406,6 +429,7 @@ class ROITracker:
         if mean_val < config.MIN_TRACK_MEAN_INTENSITY and std_val < config.MIN_TRACK_STDDEV:
             return False
 
+        # Require a minimum number of keypoints to avoid textureless regions.
         keypoints, _ = extract_orb_features(roi, self.orb)
         if len(keypoints) < config.MIN_TRACK_KEYPOINTS:
             return False
@@ -421,6 +445,8 @@ class ROITracker:
         initialized tracker instance and its name.
         """
 
+        # Try multiple tracker implementations so the demo runs across
+        # different OpenCV builds.
         tracker_factories = [
             ("CSRT", getattr(cv2, "TrackerCSRT_create", None)),
             ("CSRT", getattr(cv2, "legacy", None) and getattr(cv2.legacy, "TrackerCSRT_create", None)),
@@ -474,10 +500,12 @@ class ROITracker:
         if self.roi_model is None:
             return make_match_result(None, 0, 0)
 
+        # Step 1: compute ORB features for the full frame.
         frame_keypoints, frame_descriptors = extract_orb_features(frame, self.orb)
         if frame_descriptors is None or len(frame_keypoints) < 4:
             return make_match_result(None, 0, 0)
 
+        # Step 2: match template descriptors against frame descriptors.
         matches = self.matcher.knnMatch(self.roi_model.template_descriptors, frame_descriptors, k=2)
         good_matches = []
         for pair in matches:
@@ -490,6 +518,7 @@ class ROITracker:
         if len(good_matches) < config.MIN_GOOD_MATCHES:
             return make_match_result(None, len(good_matches), 0)
 
+        # Step 3: estimate homography via RANSAC to ensure geometric consistency.
         template_points = np.float32([self.roi_model.template_keypoints[match.queryIdx].pt for match in good_matches]).reshape(-1, 1, 2)
         frame_points = np.float32([frame_keypoints[match.trainIdx].pt for match in good_matches]).reshape(-1, 1, 2)
 
@@ -501,6 +530,7 @@ class ROITracker:
         if inliers < config.MIN_HOMOGRAPHY_INLIERS:
             return make_match_result(None, len(good_matches), inliers)
 
+        # Step 4: project template corners to form a bbox in the frame.
         width, height = self.roi_model.template_size
         template_corners = np.float32(
             [[0, 0], [width, 0], [width, height], [0, height]]

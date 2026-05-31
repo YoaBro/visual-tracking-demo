@@ -22,6 +22,7 @@ class EventLogger:
     """Collects session events and optionally persists them to disk."""
 
     def __init__(self, max_events: int = 100) -> None:
+        # Deque keeps the most recent events for the on-screen log panel.
         self._events: Deque[LogEvent] = deque(maxlen=max_events)
 
     def log_event(self, event_type: str, details: str = "") -> None:
@@ -45,6 +46,7 @@ class EventLogger:
     def save_to_file(self, filepath: str) -> bool:
         """Write all events to a log file. Returns True on success."""
 
+        # This is called on quit to persist the session timeline.
         directory = os.path.dirname(filepath)
         if directory:
             os.makedirs(directory, exist_ok=True)
